@@ -102,7 +102,8 @@ function useFirestore(collectionName, docId, defaultValue) {
 }
 
 // --- 图片自动压缩工具函数 (解决 1MB 限制) ---
-const compressAndUpload = (file, callback) => {
+// --- 升级版：图片自动压缩工具 (支持自定义宽度) ---
+const compressAndUpload = (file, maxWidth, callback) => {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -111,8 +112,10 @@ const compressAndUpload = (file, callback) => {
             const canvas = document.createElement('canvas');
             let width = img.width;
             let height = img.height;
-            // 限制最大宽度，防止图片过大
-            const MAX_WIDTH = 1000; 
+            
+            // 使用传入的 maxWidth，如果没有传入则默认 800
+            const MAX_WIDTH = maxWidth || 800; 
+            
             if (width > MAX_WIDTH) {
                 height *= MAX_WIDTH / width;
                 width = MAX_WIDTH;
@@ -121,8 +124,9 @@ const compressAndUpload = (file, callback) => {
             canvas.height = height;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, width, height);
-            // 压缩质量 0.7
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            
+            // 压缩质量 0.6 (足够清晰且体积小)
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
             callback(dataUrl);
         };
         img.src = event.target.result;

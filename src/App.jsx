@@ -6,6 +6,11 @@ import {
   CloudSnow, Languages, CreditCard, Banknote, User, Search, Heart, Star, Edit2, Save, Copy, Check, Luggage, Users, ArrowLeft, UserPlus, MinusCircle, Upload, Image as ImageIcon, Globe, ChevronRight, ChevronLeft
 } from 'lucide-react';
 
+// --- Firebase 引用 ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, onSnapshot, setDoc } from 'firebase/firestore';
+
 // --- 1. 全局常量定义 ---
 
 const THEME = {
@@ -17,18 +22,115 @@ const THEME = {
   border: '#DDDDDD',
 };
 
-// 默认封面图
 const DEFAULT_COVER = "https://images.unsplash.com/photo-1548263594-a71ea65a857c?auto=format&fit=crop&w=800&q=80";
-// 默认头像
 const USER_AVATAR = "https://i.imgur.com/VjROZQL.jpeg"; 
 
-// 默认用户名单
 const DEFAULT_PAYERS = [
   "Pei Teng", "Pei Leng", "Sony Lee", "Pei Wen", 
   "Kobe", "Jordan", "Penny Phang", "Edward Foo"
 ];
 
-// --- 2. 工具函数 & Hooks ---
+// --- 2. Firebase 初始化 (已填入你的 Key) ---
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBeNe0gZ8w8lbF565sHOonkaZKZY6QVx9A",
+  authDomain: "lee-family-hokkaido-2025.firebaseapp.com",
+  projectId: "lee-family-hokkaido-2025",
+  storageBucket: "lee-family-hokkaido-2025.firebasestorage.app",
+  messagingSenderId: "1049495159054",
+  appId: "1:1049495159054:web:a37f2cf06fe14f43d5575f",
+  measurementId: "G-037S76KS1F"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = 'lee_family_hokkaido_2025'; // 数据库主ID
+
+// --- 3. 核心 Hook: useFirestore (云端同步) ---
+
+function useFirestore(collectionName, docId, defaultValue) {
+  const [value, setValue] = useState(defaultValue);
+  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
+
+  // 1. 自动匿名登录
+  useEffect(() => {
+    signInAnonymously(auth).catch((error) => console.error("登录失败:", error));
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. 监听数据
+  useEffect(() => {
+    if (!user) return; // 等登录成功再监听
+
+    // 路径: artifacts/APP_ID/public/data/集合/文档
+    const docRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, docId);
+
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data().data;
+        if (data !== undefined) setValue(data);
+      } else {
+        // 如果云端没数据，初始化一份
+        setDoc(docRef, { data: defaultValue });
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error("读取出错:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user, collectionName, docId]);
+
+  // 3. 更新数据
+  const updateValue = async (newValue) => {
+    setValue(newValue); // 乐观更新本地
+    if (user) {
+      try {
+        const docRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, docId);
+        await setDoc(docRef, { data: newValue });
+      } catch (error) {
+        console.error("写入出错:", error);
+      }
+    }
+  };
+
+  return [value, updateValue, loading];
+}
+
+// --- 图片自动压缩工具函数 (解决 1MB 限制) ---
+const compressAndUpload = (file, callback) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let width = img.width;
+            let height = img.height;
+            // 限制最大宽度，防止图片过大
+            const MAX_WIDTH = 1000; 
+            if (width > MAX_WIDTH) {
+                height *= MAX_WIDTH / width;
+                width = MAX_WIDTH;
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            // 压缩质量 0.7
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            callback(dataUrl);
+        };
+        img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+};
+
+// --- 工具函数 ---
 
 const getIcon = (type) => {
   switch (type) {
@@ -42,31 +144,6 @@ const getIcon = (type) => {
     default: return <MapPin size={16} />;
   }
 };
-
-// LocalStorage 持久化 Hook (版本 v26 - 修复图标引用错误并重置数据)
-function useStickyState(defaultValue, key) {
-  const [value, setValue] = useState(() => {
-    try {
-      const stickyValue = window.localStorage.getItem(key);
-      if (stickyValue !== null && stickyValue !== "undefined") {
-        return JSON.parse(stickyValue);
-      }
-    } catch (error) {
-      console.warn(`Error parsing localStorage key "${key}":`, error);
-    }
-    return defaultValue;
-  });
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(key, JSON.stringify(value));
-    } catch (error) {
-      console.warn(`Error writing localStorage key "${key}":`, error);
-    }
-  }, [key, value]);
-
-  return [value, setValue];
-}
 
 const openMap = (location) => {
   const query = encodeURIComponent(location);
@@ -89,82 +166,18 @@ const copyToClipboard = (text) => {
     }
 };
 
-// --- 3. 初始数据 ---
+// --- 初始数据 ---
 
 const INITIAL_FLIGHTS = [
-  {
-    type: 'Outbound',
-    date: 'Dec 25',
-    route: 'KUL ➔ CTS',
-    flightNo: 'D79550',
-    airline: 'AirAsia X',
-    ref: 'H7NTRI',
-    time: '01:05 - 09:40',
-    duration: '8h 35m',
-    location: 'New Chitose Airport'
-  },
-  {
-    type: 'Return',
-    date: 'Jan 01',
-    route: 'CTS ➔ KUL',
-    flightNo: 'D79551',
-    airline: 'AirAsia X',
-    ref: 'AD613Q',
-    time: '10:55 - 18:45',
-    duration: '7h 50m',
-    location: 'Kuala Lumpur International Airport Terminal 2'
-  }
+  { type: 'Outbound', date: 'Dec 25', route: 'KUL ➔ CTS', flightNo: 'D79550', airline: 'AirAsia X', ref: 'H7NTRI', time: '01:05 - 09:40', duration: '8h 35m', location: 'New Chitose Airport' },
+  { type: 'Return', date: 'Jan 01', route: 'CTS ➔ KUL', flightNo: 'D79551', airline: 'AirAsia X', ref: 'AD613Q', time: '10:55 - 18:45', duration: '7h 50m', location: 'Kuala Lumpur International Airport Terminal 2' }
 ];
 
 const INITIAL_ACCOMMODATIONS = [
-  {
-    id: 1,
-    name: 'The Tower by Hoshino Resorts',
-    nameCn: '星野集团 Tomamu',
-    dates: 'Dec 25 - 27',
-    rating: '4.8',
-    location: 'Hoshino Resorts Tomamu The Tower',
-    image: 'https://images.unsplash.com/photo-1551524559-8af4e6624178?auto=format&fit=crop&w=800&q=80',
-    details: [{ room: 'Twin Room ×3', ref: 'SUR940950', source: 'Klook' }]
-  },
-  {
-    id: 2,
-    name: 'JR Inn Asahikawa',
-    nameCn: '旭川 JR Inn',
-    dates: 'Dec 27 - 28',
-    rating: '4.6',
-    location: 'JR Inn Asahikawa',
-    image: 'https://images.unsplash.com/photo-1618773928121-c32242e63f39?auto=format&fit=crop&w=800&q=80',
-    details: [
-      { room: 'Economy Twin ×1', ref: '1433806953951695', source: 'Trips' },
-      { room: 'Twin Room ×2', ref: '1433806953958841', source: 'Trips' }
-    ]
-  },
-  {
-    id: 3,
-    name: 'Hotel Sonia Otaru',
-    nameCn: '小樽索尼娅酒店',
-    dates: 'Dec 28 - 29',
-    rating: '4.5',
-    location: 'Hotel Sonia Otaru',
-    image: 'https://images.unsplash.com/photo-1579760777249-204739266779?auto=format&fit=crop&w=800&q=80',
-    details: [
-        { room: 'Twin Room ×1', ref: '1433806936047743', source: 'Trips' },
-        { room: '2 Single + 1 Sofa ×2', ref: '1952402636', source: 'Agoda' }
-    ]
-  },
-  {
-    id: 4,
-    name: 'Granbell Hotel Tanuki',
-    nameCn: '札幌薄野格兰贝尔',
-    dates: 'Dec 29 - Jan 01',
-    rating: '4.7',
-    location: 'Sapporo Granbell Hotel',
-    image: 'https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?auto=format&fit=crop&w=800&q=80', 
-    details: [
-        { room: 'Twin Room 18m² ×4', ref: '1433806954425507', source: 'Trips' }
-    ]
-  }
+  { id: 1, name: 'The Tower by Hoshino Resorts', nameCn: '星野集团 Tomamu', dates: 'Dec 25 - 27', rating: '4.8', location: 'Hoshino Resorts Tomamu The Tower', image: 'https://images.unsplash.com/photo-1551524559-8af4e6624178?auto=format&fit=crop&w=800&q=80', details: [{ room: 'Twin Room ×3', ref: 'SUR940950', source: 'Klook' }] },
+  { id: 2, name: 'JR Inn Asahikawa', nameCn: '旭川 JR Inn', dates: 'Dec 27 - 28', rating: '4.6', location: 'JR Inn Asahikawa', image: 'https://images.unsplash.com/photo-1618773928121-c32242e63f39?auto=format&fit=crop&w=800&q=80', details: [{ room: 'Economy Twin ×1', ref: '1433806953951695', source: 'Trips' }, { room: 'Twin Room ×2', ref: '1433806953958841', source: 'Trips' }] },
+  { id: 3, name: 'Hotel Sonia Otaru', nameCn: '小樽索尼娅酒店', dates: 'Dec 28 - 29', rating: '4.5', location: 'Hotel Sonia Otaru', image: 'https://images.unsplash.com/photo-1579760777249-204739266779?auto=format&fit=crop&w=800&q=80', details: [{ room: 'Twin Room ×1', ref: '1433806936047743', source: 'Trips' }, { room: '2 Single + 1 Sofa ×2', ref: '1952402636', source: 'Agoda' }] },
+  { id: 4, name: 'Granbell Hotel Tanuki', nameCn: '札幌薄野格兰贝尔', dates: 'Dec 29 - Jan 01', rating: '4.7', location: 'Sapporo Granbell Hotel', image: 'https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?auto=format&fit=crop&w=800&q=80', details: [{ room: 'Twin Room 18m² ×4', ref: '1433806954425507', source: 'Trips' }] }
 ];
 
 const INITIAL_TRANSFERS = [
@@ -176,108 +189,14 @@ const INITIAL_TRANSFERS = [
 ];
 
 const INITIAL_ITINERARY = [
-  {
-    day: 1,
-    date: 'Dec 25',
-    titleCn: '抵达北海道 & 前往 Tomamu',
-    titleEn: 'Arrival',
-    weather: '-5°C',
-    iconType: 'plane',
-    activities: [
-      { time: '09:40', content: 'Arrive New Chitose Airport', location: 'New Chitose Airport' },
-      { time: '13:00', content: 'Check-in: The Tower', location: 'Hoshino Resorts Tomamu The Tower' },
-      { time: '18:00', content: 'Dinner: Nininupuri', location: 'Nininupuri Tomamu' }
-    ]
-  },
-  {
-    day: 2,
-    date: 'Dec 26',
-    titleCn: 'Tomamu 全日滑雪体验',
-    titleEn: 'Snow Resort',
-    weather: '-8°C',
-    iconType: 'camera',
-    activities: [
-      { time: '09:00', content: 'Skiing & Snow Park', location: 'Tomamu Ski Resort' },
-      { time: '14:00', content: 'Mina-Mina Beach & Onsen', location: 'Mina-Mina Beach' },
-      { time: '17:00', content: 'Ice Village', location: 'Ice Village Tomamu' }
-    ]
-  },
-  {
-    day: 3,
-    date: 'Dec 27',
-    titleCn: '富良野 & 美瑛观光',
-    titleEn: 'Sightseeing',
-    weather: '-6°C',
-    iconType: 'car',
-    activities: [
-      { time: '11:00', content: 'Furano Lunch (Kumagera)', location: 'Kumagera Furano' },
-      { time: '13:30', content: 'Shirahige Falls', location: 'Shirahige Falls' },
-      { time: '18:00', content: 'Check-in Asahikawa', location: 'JR Inn Asahikawa' }
-    ]
-  },
-  {
-    day: 4,
-    date: 'Dec 28',
-    titleCn: '旭川前往小樽',
-    titleEn: 'To Otaru',
-    weather: '-4°C',
-    iconType: 'train',
-    activities: [
-      { time: '13:00', content: 'Tenguyama Ropeway', location: 'Otaru Tenguyama Ropeway' },
-      { time: '15:30', content: 'Otaru Canal Walk', location: 'Otaru Canal' },
-      { time: '18:30', content: 'Dinner: Sushi Street', location: 'Otaru Sushi Street' }
-    ]
-  },
-  {
-    day: 5,
-    date: 'Dec 29',
-    titleCn: '小樽 & 札幌',
-    titleEn: 'To Sapporo',
-    weather: '-3°C',
-    iconType: 'coffee',
-    activities: [
-      { time: '10:00', content: 'Music Box Museum', location: 'Otaru Music Box Museum' },
-      { time: '15:30', content: 'Check-in: Granbell', location: 'Sapporo Granbell Hotel' },
-      { time: '17:00', content: 'Tanukikoji Shopping', location: 'Tanukikoji Shopping Arcade' }
-    ]
-  },
-  {
-    day: 6,
-    date: 'Dec 30',
-    titleCn: '札幌自由行',
-    titleEn: 'Sapporo Day',
-    weather: '-5°C',
-    iconType: 'map',
-    activities: [
-      { time: '09:00', content: 'Odori Park & TV Tower', location: 'Sapporo TV Tower' },
-      { time: '11:00', content: 'Nijo Market', location: 'Nijo Market Sapporo' },
-      { time: '19:00', content: 'Genghis Khan BBQ', location: 'Daruma Genghis Khan' }
-    ]
-  },
-  {
-    day: 7,
-    date: 'Dec 31',
-    titleCn: '跨年日',
-    titleEn: 'New Year\'s Eve',
-    weather: '-7°C',
-    iconType: 'music',
-    activities: [
-      { time: '10:00', content: 'Daimaru Shopping', location: 'Daimaru Sapporo' },
-      { time: '22:00', content: 'Hokkaido Shrine', location: 'Hokkaido Shrine' }
-    ]
-  },
-  {
-    day: 8,
-    date: 'Jan 01',
-    titleCn: '返程',
-    titleEn: 'Departure',
-    weather: '-4°C',
-    iconType: 'plane',
-    activities: [
-      { time: '07:30', content: 'Transfer to Airport', location: 'New Chitose Airport' },
-      { time: '10:55', content: 'Flight D79551', location: 'New Chitose Airport' }
-    ]
-  }
+  { day: 1, date: 'Dec 25', titleCn: '抵达北海道 & 前往 Tomamu', titleEn: 'Arrival', weather: '-5°C', iconType: 'plane', activities: [{ time: '09:40', content: 'Arrive New Chitose Airport', location: 'New Chitose Airport' }, { time: '13:00', content: 'Check-in: The Tower', location: 'Hoshino Resorts Tomamu The Tower' }, { time: '18:00', content: 'Dinner: Nininupuri', location: 'Nininupuri Tomamu' }] },
+  { day: 2, date: 'Dec 26', titleCn: 'Tomamu 全日滑雪体验', titleEn: 'Snow Resort', weather: '-8°C', iconType: 'camera', activities: [{ time: '09:00', content: 'Skiing & Snow Park', location: 'Tomamu Ski Resort' }, { time: '14:00', content: 'Mina-Mina Beach & Onsen', location: 'Mina-Mina Beach' }, { time: '17:00', content: 'Ice Village', location: 'Ice Village Tomamu' }] },
+  { day: 3, date: 'Dec 27', titleCn: '富良野 & 美瑛观光', titleEn: 'Sightseeing', weather: '-6°C', iconType: 'car', activities: [{ time: '11:00', content: 'Furano Lunch (Kumagera)', location: 'Kumagera Furano' }, { time: '13:30', content: 'Shirahige Falls', location: 'Shirahige Falls' }, { time: '18:00', content: 'Check-in Asahikawa', location: 'JR Inn Asahikawa' }] },
+  { day: 4, date: 'Dec 28', titleCn: '旭川前往小樽', titleEn: 'To Otaru', weather: '-4°C', iconType: 'train', activities: [{ time: '13:00', content: 'Tenguyama Ropeway', location: 'Otaru Tenguyama Ropeway' }, { time: '15:30', content: 'Otaru Canal Walk', location: 'Otaru Canal' }, { time: '18:30', content: 'Dinner: Sushi Street', location: 'Otaru Sushi Street' }] },
+  { day: 5, date: 'Dec 29', titleCn: '小樽 & 札幌', titleEn: 'To Sapporo', weather: '-3°C', iconType: 'coffee', activities: [{ time: '10:00', content: 'Music Box Museum', location: 'Otaru Music Box Museum' }, { time: '15:30', content: 'Check-in: Granbell', location: 'Sapporo Granbell Hotel' }, { time: '17:00', content: 'Tanukikoji Shopping', location: 'Tanukikoji Shopping Arcade' }] },
+  { day: 6, date: 'Dec 30', titleCn: '札幌自由行', titleEn: 'Sapporo Day', weather: '-5°C', iconType: 'map', activities: [{ time: '09:00', content: 'Odori Park & TV Tower', location: 'Sapporo TV Tower' }, { time: '11:00', content: 'Nijo Market', location: 'Nijo Market Sapporo' }, { time: '19:00', content: 'Genghis Khan BBQ', location: 'Daruma Genghis Khan' }] },
+  { day: 7, date: 'Dec 31', titleCn: '跨年日', titleEn: 'New Year\'s Eve', weather: '-7°C', iconType: 'music', activities: [{ time: '10:00', content: 'Daimaru Shopping', location: 'Daimaru Sapporo' }, { time: '22:00', content: 'Hokkaido Shrine', location: 'Hokkaido Shrine' }] },
+  { day: 8, date: 'Jan 01', titleCn: '返程', titleEn: 'Departure', weather: '-4°C', iconType: 'plane', activities: [{ time: '07:30', content: 'Transfer to Airport', location: 'New Chitose Airport' }, { time: '10:55', content: 'Flight D79551', location: 'New Chitose Airport' }] }
 ];
 
 const WINTER_CHECKLIST_TEMPLATE = [
@@ -303,13 +222,13 @@ const EXCHANGE_RATE = 0.031;
 
 // --- 4. 子组件 (Components) ---
 
-// 4.1 Plan Tab
 const PlanTab = () => {
-  const [subTab, setSubTab] = useStickyState('schedule', 'lee_subTab_v26'); 
+  const [subTab, setSubTab] = useState('schedule'); 
   const [expandedDay, setExpandedDay] = useState(1);
-  const [itinerary, setItinerary] = useStickyState(INITIAL_ITINERARY, 'lee_itinerary_v26');
-  const [transfers, setTransfers] = useStickyState(INITIAL_TRANSFERS, 'lee_transfers_v26');
-  const [accommodations, setAccommodations] = useStickyState(INITIAL_ACCOMMODATIONS, 'lee_accommodations_v26');
+  // 🔥 改为 useFirestore
+  const [itinerary, setItinerary] = useFirestore('hokkaido_trip', 'itinerary', INITIAL_ITINERARY);
+  const [transfers, setTransfers] = useFirestore('hokkaido_trip', 'transfers', INITIAL_TRANSFERS);
+  const [accommodations, setAccommodations] = useFirestore('hokkaido_trip', 'accommodations', INITIAL_ACCOMMODATIONS);
   
   const [isEditing, setIsEditing] = useState(false);
   const [editingDay, setEditingDay] = useState(null);
@@ -381,18 +300,12 @@ const PlanTab = () => {
   
   const deleteAccommodation = (id) => setAccommodations(accommodations.filter(h => h.id !== id));
   
+  // 🔥 改为自动压缩上传
   const handleHotelImageUpload = (id, e) => {
     const file = e.target.files[0];
-    if (file) {
-        if (file.size > 2 * 1024 * 1024) { 
-            alert("Image too large (< 2MB)"); return; 
-        }
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            updateAccommodation(id, 'image', reader.result);
-        };
-        reader.readAsDataURL(file);
-    }
+    compressAndUpload(file, (dataUrl) => {
+        updateAccommodation(id, 'image', dataUrl);
+    });
   };
 
   const updateRoomDetail = (hotelId, idx, field, value) => {
@@ -646,20 +559,20 @@ const PlanTab = () => {
                                     <h4 className="font-bold text-[#222222] text-lg leading-tight mb-1 cursor-pointer hover:text-[#FF5A5F]" onClick={() => openMap(hotel.location)}>{hotel.name}</h4>
                                     <p className="text-sm text-[#717171] mb-4">{hotel.nameCn}</p>
                                     <div className="flex flex-col gap-2">
-                                        {hotel.details.map((d, idx) => (
-                                            <div key={idx} className="flex flex-col gap-1 text-sm bg-[#F7F7F7] p-3 rounded-xl border border-[#DDDDDD]">
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-[#222222] font-medium flex items-center gap-2"><Hotel size={14}/> {d.room}</span>
-                                                    <span className="text-[10px] text-[#717171] bg-white px-1.5 py-0.5 rounded border">{d.source || 'Booking'}</span>
+                                            {hotel.details.map((d, idx) => (
+                                                <div key={idx} className="flex flex-col gap-1 text-sm bg-[#F7F7F7] p-3 rounded-xl border border-[#DDDDDD]">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-[#222222] font-medium flex items-center gap-2"><Hotel size={14}/> {d.room}</span>
+                                                        <span className="text-[10px] text-[#717171] bg-white px-1.5 py-0.5 rounded border">{d.source || 'Booking'}</span>
+                                                    </div>
+                                                    <div className="flex items-center justify-between mt-1 pt-1 border-t border-gray-200">
+                                                        <span className="text-xs text-[#717171] font-mono leading-relaxed tracking-wide">{d.ref}</span>
+                                                        <button onClick={() => copyToClipboard(d.ref)} className="flex items-center gap-1 text-[10px] text-[#FF5A5F] font-bold bg-white px-2 py-1 rounded border border-[#DDDDDD] hover:bg-[#FF5A5F] hover:text-white transition-colors">
+                                                            <Copy size={10}/> Copy Ref
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                                <div className="flex items-center justify-between mt-1 pt-1 border-t border-gray-200">
-                                                    <span className="text-xs text-[#717171] font-mono leading-relaxed tracking-wide">{d.ref}</span>
-                                                    <button onClick={() => copyToClipboard(d.ref)} className="flex items-center gap-1 text-[10px] text-[#FF5A5F] font-bold bg-white px-2 py-1 rounded border border-[#DDDDDD] hover:bg-[#FF5A5F] hover:text-white transition-colors">
-                                                        <Copy size={10}/> Copy Ref
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
+                                            ))}
                                     </div>
                                 </>
                             )}
@@ -735,22 +648,21 @@ const PlanTab = () => {
   );
 };
 
-// 4.2 Checklist (Multi-User)
 const ChecklistTab = () => {
-  const [users, setUsers] = useStickyState(DEFAULT_PAYERS, 'lee_users_list_v26');
-  const [activeUser, setActiveUser] = useState(null); 
-  const [isEditingUsers, setIsEditingUsers] = useState(false);
-  const [newUserName, setNewUserName] = useState('');
-  const [userAvatars, setUserAvatars] = useStickyState({}, 'lee_user_avatars_v26');
-
-  const [checklists, setChecklists] = useStickyState(() => {
+  // 🔥 改为 useFirestore
+  const [users, setUsers] = useFirestore('hokkaido_trip', 'users_list', DEFAULT_PAYERS);
+  const [userAvatars, setUserAvatars] = useFirestore('hokkaido_trip', 'user_avatars', {});
+  const [checklists, setChecklists] = useFirestore('hokkaido_trip', 'checklists', (() => {
     const initial = {};
     DEFAULT_PAYERS.forEach(user => {
       initial[user] = WINTER_CHECKLIST_TEMPLATE.map(i => ({...i})); 
     });
     return initial;
-  }, 'lee_checklists_multiuser_v26');
+  })());
 
+  const [activeUser, setActiveUser] = useState(null); 
+  const [isEditingUsers, setIsEditingUsers] = useState(false);
+  const [newUserName, setNewUserName] = useState('');
   const [newItem, setNewItem] = useState('');
   
   const addUser = (e) => {
@@ -759,7 +671,7 @@ const ChecklistTab = () => {
       const name = newUserName.trim();
       setUsers([...users, name]);
       if (!checklists[name]) {
-          setChecklists(prev => ({...prev, [name]: WINTER_CHECKLIST_TEMPLATE.map(i => ({...i}))}));
+          setChecklists({...checklists, [name]: WINTER_CHECKLIST_TEMPLATE.map(i => ({...i}))});
       }
       setNewUserName('');
   };
@@ -768,19 +680,12 @@ const ChecklistTab = () => {
       setUsers(users.filter(u => u !== nameToRemove));
   };
 
+  // 🔥 改为自动压缩上传
   const handleAvatarUpload = (userName, e) => {
     const file = e.target.files[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) { 
-         alert("Image too large. Please use an image < 2MB.");
-         return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUserAvatars(prev => ({...prev, [userName]: reader.result}));
-      };
-      reader.readAsDataURL(file);
-    }
+    compressAndUpload(file, (dataUrl) => {
+        setUserAvatars({...userAvatars, [userName]: dataUrl});
+    });
   };
 
   if (activeUser) {
@@ -959,11 +864,11 @@ const ChecklistTab = () => {
   );
 };
 
-// 4.3 Shopping Tab
 const ShoppingTab = () => {
-    const [shopItems, setShopItems] = useStickyState([
+    // 🔥 改为 useFirestore
+    const [shopItems, setShopItems] = useFirestore('hokkaido_trip', 'shopping_list', [
         { id: 1, text: 'Shiroi Koibito', img: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80' }
-    ], 'lee_shopping_v26');
+    ]);
     const [text, setText] = useState('');
     
     const addItem = (e) => {
@@ -973,12 +878,13 @@ const ShoppingTab = () => {
         setText('');
     };
 
+    // 🔥 改为自动压缩上传
     const handleImageUpload = (id, e) => {
         const file = e.target.files[0];
-        if (file) {
-            const url = URL.createObjectURL(file);
-            setShopItems(shopItems.map(item => item.id === id ? { ...item, img: url } : item));
-        }
+        compressAndUpload(file, (dataUrl) => {
+            const updated = shopItems.map(item => item.id === id ? { ...item, img: dataUrl } : item);
+            setShopItems(updated);
+        });
     };
 
     const deleteItem = (id) => setShopItems(shopItems.filter(i => i.id !== id));
@@ -1004,7 +910,10 @@ const ShoppingTab = () => {
                                 </label>
                              )}
                              {item.img && (
-                                <button onClick={() => setShopItems(shopItems.map(i => i.id === item.id ? { ...i, img: null } : i))} className="absolute top-2 right-2 bg-white p-1 rounded-full shadow-md"><X size={12} className="text-[#222222]"/></button>
+                                <button onClick={() => {
+                                    const updated = shopItems.map(i => i.id === item.id ? { ...i, img: null } : i);
+                                    setShopItems(updated);
+                                }} className="absolute top-2 right-2 bg-white p-1 rounded-full shadow-md"><X size={12} className="text-[#222222]"/></button>
                              )}
                         </div>
                         <div className="p-3 flex justify-between items-center bg-white border-t border-[#F7F7F7]">
@@ -1026,15 +935,16 @@ const ShoppingTab = () => {
     )
 }
 
-// 4.4 Budget Tab - FIXED: Separate Edit Buttons & Bug Fix
 const BudgetTab = () => {
-  const [expenses, setExpenses] = useStickyState([], 'lee_expenses_v26');
+  // 🔥 改为 useFirestore
+  const [expenses, setExpenses] = useFirestore('hokkaido_trip', 'expenses', []);
   const [view, setView] = useState('summary'); 
   const [item, setItem] = useState('');
   const [amount, setAmount] = useState('');
   const [payer, setPayer] = useState(DEFAULT_PAYERS[0]);
   const [method, setMethod] = useState('Credit Card');
   
+  // Edit state
   const [editingId, setEditingId] = useState(null);
   const [editItem, setEditItem] = useState('');
   const [editAmount, setEditAmount] = useState('');
@@ -1047,14 +957,10 @@ const BudgetTab = () => {
     setItem(''); setAmount('');
   };
   
-  // Bug Fix: Ensure editing state is cleared if the editing item is deleted
-  const deleteExpense = (id) => {
-    setExpenses(expenses.filter(e => e.id !== id));
-    if (editingId === id) setEditingId(null);
-  };
-  
+  const deleteExpense = (id) => setExpenses(expenses.filter(e => e.id !== id));
   const totalJPY = expenses.reduce((acc, c) => acc + c.amount, 0);
 
+  // Group by Date Logic
   const groupedExpenses = expenses.reduce((acc, expense) => {
     const date = new Date(expense.id).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     if (!acc[date]) acc[date] = [];
@@ -1075,7 +981,6 @@ const BudgetTab = () => {
     setEditingId(null);
   };
 
-  // Summary View
   if (view === 'summary') {
     return (
       <div className="h-full px-6 pt-6 pb-24 flex flex-col bg-[#F7F7F7]">
@@ -1156,7 +1061,6 @@ const BudgetTab = () => {
     );
   }
 
-  // --- View 2: Details (Full History & Edit) ---
   if (view === 'details') {
       return (
         <div className="h-full flex flex-col bg-[#F7F7F7] pb-24">
@@ -1176,9 +1080,8 @@ const BudgetTab = () => {
                         <h3 className="text-xs font-bold text-[#717171] uppercase mb-3 sticky top-0 bg-[#F7F7F7] py-1 z-10">{date}</h3>
                         <div className="space-y-3">
                             {dayExpenses.map(ex => (
-                                <div key={ex.id} className="p-4 bg-white rounded-xl border border-[#DDDDDD] shadow-sm">
+                                <div key={ex.id} className="p-4 bg-white rounded-xl border border-[#DDDDDD] shadow-sm" onClick={() => !editingId && startEditing(ex)}>
                                     {editingId === ex.id ? (
-                                        // --- Edit Mode ---
                                         <div className="flex gap-2 items-center">
                                             <div className="flex-1 space-y-2">
                                                 <input className="w-full border p-1 rounded text-sm font-bold" value={editItem} onChange={(e) => setEditItem(e.target.value)} />
@@ -1195,7 +1098,6 @@ const BudgetTab = () => {
                                             </div>
                                         </div>
                                     ) : (
-                                        // --- View Mode ---
                                         <div className="flex justify-between items-center">
                                             <div>
                                                 <span className="block text-[#222222] font-bold text-sm">{ex.item}</span>
@@ -1206,14 +1108,9 @@ const BudgetTab = () => {
                                                     </span>
                                                 </div>
                                             </div>
-                                            <div className="flex flex-col items-end gap-1">
+                                            <div className="flex flex-col items-end">
                                                 <span className="text-[#222222] font-bold text-sm">¥{ex.amount.toLocaleString()}</span>
-                                                <button 
-                                                    onClick={() => startEditing(ex)}
-                                                    className="text-[#FF5A5F] bg-[#FF5A5F]/10 p-1.5 rounded-full hover:bg-[#FF5A5F] hover:text-white transition-colors"
-                                                >
-                                                    <Edit2 size={12}/>
-                                                </button>
+                                                <span className="text-[10px] text-[#717171]">{new Date(ex.id).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                                             </div>
                                         </div>
                                     )}
@@ -1231,7 +1128,6 @@ const BudgetTab = () => {
   }
 };
 
-// 4.5 Translator Tab
 const TranslatorTab = () => {
     const [revealed, setRevealed] = useState(null);
     return (
@@ -1273,35 +1169,59 @@ const TranslatorTab = () => {
     );
 };
 
-// --- 5. Main App Component ---
+const LiveAgentButton = () => {
+    const [isExpanded, setIsExpanded] = useState(false);
+
+    return (
+        <div className="fixed bottom-24 right-0 z-50 flex items-center justify-end pointer-events-none">
+             <div className="pointer-events-auto flex items-center">
+                <button 
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className={`bg-white border border-gray-200 shadow-md p-2 rounded-l-xl flex items-center justify-center transition-all duration-300 ${isExpanded ? 'mr-2' : 'translate-x-0'}`}
+                    style={{ transform: isExpanded ? 'translateX(0)' : 'translateX(0)' }} 
+                >
+                    {isExpanded ? <ChevronRight size={20} className="text-gray-500"/> : <ChevronLeft size={20} className="text-[#FF5A5F]"/>}
+                </button>
+
+                <div className={`transition-all duration-300 overflow-hidden ${isExpanded ? 'w-auto opacity-100 mr-4' : 'w-0 opacity-0'}`}>
+                    <a 
+                        href="https://wa.me/+601165090611" 
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="bg-[#25D366] text-white px-4 py-2.5 rounded-full shadow-lg flex items-center gap-2 font-bold text-sm whitespace-nowrap hover:bg-[#1ebc57] transition-colors"
+                    >
+                        <MessageCircle size={18} fill="white" /> Live Agent
+                    </a>
+                </div>
+             </div>
+        </div>
+    );
+};
 
 export default function App() {
-  const [activeTab, setActiveTab] = useStickyState('plan', 'lee_activeTab_v25');
-  const [coverPhoto, setCoverPhoto] = useStickyState(DEFAULT_COVER, 'lee_trip_cover_v4');
+  const [activeTab, setActiveTab] = useState('plan');
+  // 🔥 改为 useFirestore
+  const [coverPhoto, setCoverPhoto] = useFirestore('hokkaido_trip', 'app_settings', { cover: DEFAULT_COVER });
 
+  // 🔥 改为自动压缩上传
   const handleCoverUpload = (e) => {
     const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) { 
-         alert("Image too large. Please use < 5MB.");
-         return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCoverPhoto(reader.result);
-      };
-      reader.readAsDataURL(file);
-    }
+    compressAndUpload(file, (dataUrl) => {
+        // 这里需要注意，我们存的是对象 {cover: ...}，所以要传对象进去
+        setCoverPhoto({ cover: dataUrl });
+    });
   };
+
+  // 兼容逻辑：如果读出来的是字符串，就用字符串；如果是对象，取 cover 字段
+  const coverSrc = coverPhoto?.cover || (typeof coverPhoto === 'string' ? coverPhoto : DEFAULT_COVER);
 
   return (
     <div className="flex justify-center bg-[#EBEBEB] h-screen font-sans overflow-hidden">
       <div className="w-full max-w-md bg-white h-full relative flex flex-col shadow-2xl overflow-hidden">
         
-        {/* Header */}
         <header className="relative h-48 flex-shrink-0 z-50 bg-gray-200">
             <div className="absolute inset-0">
-                <img src={coverPhoto} alt="Trip Cover" className="w-full h-full object-cover" />
+                <img src={coverSrc} alt="Trip Cover" className="w-full h-full object-cover" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
             </div>
 
@@ -1311,7 +1231,7 @@ export default function App() {
                 </h1>
                 <div className="flex items-center gap-2 mt-1">
                     <span className="text-xs font-bold bg-white/20 backdrop-blur-md px-2 py-0.5 rounded border border-white/30 flex items-center gap-1">
-                      Hokkaido Trip
+                      <Globe size={12}/> Online
                     </span>
                     <span className="text-xs font-medium opacity-90 drop-shadow-sm">Dec 25 - Jan 01</span>
                 </div>
@@ -1323,7 +1243,6 @@ export default function App() {
             </label>
         </header>
 
-        {/* Content */}
         <main className="flex-1 overflow-hidden relative z-10 bg-[#F7F7F7]">
             {activeTab === 'plan' && <PlanTab />}
             {activeTab === 'shop' && <ShoppingTab />}
@@ -1332,7 +1251,8 @@ export default function App() {
             {activeTab === 'translator' && <TranslatorTab />}
         </main>
 
-        {/* Bottom Nav (Fixed) */}
+        <LiveAgentButton />
+
         <nav className="absolute bottom-0 left-0 w-full bg-white border-t border-[#DDDDDD] pb-safe pt-2 px-2 flex justify-around items-center z-50 h-[80px]">
             <NavButton active={activeTab === 'plan'} onClick={() => setActiveTab('plan')} icon={<Search size={24} />} label="Explore" />
             <NavButton active={activeTab === 'shop'} onClick={() => setActiveTab('shop')} icon={<Heart size={24} />} label="Wishlist" />

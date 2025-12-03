@@ -1,15 +1,20 @@
 {
-    "short_name": "日本游",
-    "name": "我的日本旅行助手",
-    "icons": [
-      {
-        "src": "vite.svg",
-        "sizes": "192x192",
-        "type": "image/svg+xml"
-      }
-    ],
-    "start_url": ".",
-    "display": "standalone",
-    "theme_color": "#ffffff",
-    "background_color": "#ffffff"
-  }
+  "short_name": "Hokkaido 2025",
+  "name": "Lee Family Hokkaido Trip",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#FF5A5F",
+  "background_color": "#ffffff"
+}

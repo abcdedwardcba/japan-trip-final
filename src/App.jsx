@@ -685,9 +685,11 @@ const ChecklistTab = () => {
   };
 
   // 🔥 改为自动压缩上传
+  // 🔥 修改后：头像强制压缩到 200px宽 (极小体积)
   const handleAvatarUpload = (userName, e) => {
     const file = e.target.files[0];
-    compressAndUpload(file, (dataUrl) => {
+    // 这里传入 200，表示宽度限制为 200px
+    compressAndUpload(file, 200, (dataUrl) => {
         setUserAvatars({...userAvatars, [userName]: dataUrl});
     });
   };
